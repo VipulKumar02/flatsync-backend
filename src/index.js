@@ -1,3 +1,4 @@
+const authMiddleware = require('./middleware/authMiddleware');
 const dns = require('node:dns');
 dns.setServers(['8.8.8.8', '1.1.1.1']);
 
@@ -67,19 +68,16 @@ app.post('/api/users/login', async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // 1. Check if user exists
     const user = await User.findOne({ email });
     if (!user) {
       return res.status(400).json({ error: 'Invalid email or password!' });
     }
 
-    // 2. Compare incoming password with stored hash
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(400).json({ error: 'Invalid email or password!' });
     }
 
-    // 3. Generate JWT Token
     const token = jwt.sign(
       { id: user._id, email: user.email },
       process.env.JWT_SECRET,
@@ -90,6 +88,20 @@ app.post('/api/users/login', async (req, res) => {
       message: 'Logged in successfully!',
       token,
       user: { id: user._id, name: user.name, email: user.email }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Protected Route Example (Uses Auth Middleware) ---
+app.get('/api/users/profile', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select('-password');
+    
+    res.status(200).json({
+      message: 'You have accessed a protected route successfully!',
+      user,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
