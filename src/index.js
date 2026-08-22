@@ -1,3 +1,4 @@
+const Flat = require('./models/Flat');
 const authMiddleware = require('./middleware/authMiddleware');
 const dns = require('node:dns');
 dns.setServers(['8.8.8.8', '1.1.1.1']);
@@ -102,6 +103,63 @@ app.get('/api/users/profile', authMiddleware, async (req, res) => {
     res.status(200).json({
       message: 'You have accessed a protected route successfully!',
       user,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Create Flat Route ---
+app.post('/api/flats/create', authMiddleware, async (req, res) => {
+  try {
+    const { name, address } = req.body;
+
+    // Generate a short unique invite code (e.g., "A3F9B2")
+    const inviteCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+
+    const newFlat = new Flat({
+      name,
+      address,
+      inviteCode,
+      admin: req.user.id,     // Comes from our authMiddleware bouncer!
+      members: [req.user.id]  // The creator is automatically the first member
+    });
+
+    await newFlat.save();
+
+    res.status(201).json({
+      message: 'Flat created successfully!',
+      flat: newFlat
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Join Flat Route ---
+app.post('/api/flats/join', authMiddleware, async (req, res) => {
+  try {
+    const { inviteCode } = req.body;
+
+    // 1. Find the flat matching the invite code
+    const flat = await Flat.findOne({ inviteCode });
+    if (!flat) {
+      return res.status(404).json({ error: 'Invalid invite code. Flat not found!' });
+    }
+
+    // 2. Check if the user is already a member of this flat
+    const isAlreadyMember = flat.members.includes(req.user.id);
+    if (isAlreadyMember) {
+      return res.status(400).json({ error: 'You are already a member of this flat!' });
+    }
+
+    // 3. Add the user's ID to the flat's members array
+    flat.members.push(req.user.id);
+    await flat.save();
+
+    res.status(200).json({
+      message: 'Joined flat successfully!',
+      flat
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
