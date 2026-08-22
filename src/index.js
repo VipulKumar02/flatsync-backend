@@ -166,6 +166,27 @@ app.post('/api/flats/join', authMiddleware, async (req, res) => {
   }
 });
 
+// --- Get Flat Dashboard Route ---
+app.get('/api/flats/dashboard', authMiddleware, async (req, res) => {
+  try {
+    // 1. Find a flat where the logged-in user's ID is inside the members array
+    const flat = await Flat.findOne({ members: req.user.id })
+      .populate('admin', 'name email')
+      .populate('members', 'name email');
+
+    if (!flat) {
+      return res.status(404).json({ error: 'You do not belong to any flat yet!' });
+    }
+
+    res.status(200).json({
+      message: 'Flat dashboard fetched successfully!',
+      flat
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server is running smoothly on port ${PORT}`);
