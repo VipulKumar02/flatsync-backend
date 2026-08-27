@@ -1,3 +1,5 @@
+const Settlement = require('./models/Settlement');
+const Expense = require('./models/Expense');
 const Flat = require('./models/Flat');
 const authMiddleware = require('./middleware/authMiddleware');
 const dns = require('node:dns');
@@ -181,6 +183,191 @@ app.get('/api/flats/dashboard', authMiddleware, async (req, res) => {
     res.status(200).json({
       message: 'Flat dashboard fetched successfully!',
       flat
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Add Expense Route ---
+app.post('/api/expenses/create', authMiddleware, async (req, res) => {
+  try {
+    const { description, amount, splitBetween } = req.body;
+
+    // 1. Find the flat that the logged-in user belongs to
+    const flat = await Flat.findOne({ members: req.user.id });
+    if (!flat) {
+      return res.status(404).json({ error: 'You must belong to a flat to add an expense!' });
+    }
+
+    // 2. Create the new expense entry using our rulebook
+    const newExpense = new Expense({
+      description,
+      amount,
+      paidBy: req.user.id,     // The logged-in user paid the money
+      flat: flat._id,          // Links it to their specific flat
+      splitBetween: splitBetween || flat.members // If no list is provided, split it among all roommates by default!
+    });
+
+    // 3. Save it to MongoDB
+    await newExpense.save();
+
+    res.status(201).json({
+      message: 'Expense added successfully!',
+      expense: newExpense
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Get All Flat Expenses Route ---
+app.get('/api/expenses/flat', authMiddleware, async (req, res) => {
+  try {
+    // 1. Find the flat that the logged-in user belongs to
+    const flat = await Flat.findOne({ members: req.user.id });
+    if (!flat) {
+      return res.status(404).json({ error: 'You do not belong to any flat yet!' });
+    }
+
+    // 2. Find all expenses belonging to this specific flat's ID
+    const expenses = await Expense.find({ flat: flat._id })
+      .populate('paidBy', 'name email')
+      .sort({ createdAt: -1 }); // Sorts them from newest to oldest!
+
+    res.status(200).json({
+      message: 'Expenses fetched successfully!',
+      expenses
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Calculate Flat Balances Route (Updated with Settlements) ---
+app.get('/api/expenses/balances', authMiddleware, async (req, res) => {
+  try {
+    const flat = await Flat.findOne({ members: req.user.id }).populate('members', 'name email');
+    if (!flat) {
+      return res.status(404).json({ error: 'You do not belong to any flat yet!' });
+    }
+
+    const expenses = await Expense.find({ flat: flat._id });
+    const settlements = await Settlement.find({ flat: flat._id });
+
+    const balances = {};
+    flat.members.forEach(member => {
+      balances[member._id.toString()] = {
+        name: member.name,
+        email: member.email,
+        paid: 0,
+        owed: 0,
+        settlementAdjustment: 0,
+        netBalance: 0
+      };
+    });
+
+    // 1. Process Expenses
+    expenses.forEach(expense => {
+      const payerId = expense.paidBy.toString();
+      const amount = expense.amount;
+      const splitList = expense.splitBetween;
+
+      if (balances[payerId]) {
+        balances[payerId].paid += amount;
+      }
+
+      const splitAmount = amount / splitList.length;
+      splitList.forEach(userId => {
+        const idStr = userId.toString();
+        if (balances[idStr]) {
+          balances[idStr].owed += splitAmount;
+        }
+      });
+    });
+
+    // 2. Process Settlements (Cash paid back between roommates)
+    settlements.forEach(settlement => {
+      const payerId = settlement.paidBy.toString();
+      const receiverId = settlement.paidTo.toString();
+      const amount = settlement.amount;
+
+      if (balances[payerId]) {
+        balances[payerId].settlementAdjustment += amount;
+      }
+      if (balances[receiverId]) {
+        balances[receiverId].settlementAdjustment -= amount;
+      }
+    });
+
+    // 3. Final Net Balance Calculation
+    Object.keys(balances).forEach(userId => {
+      const user = balances[userId];
+      user.netBalance = Number((user.paid - user.owed + user.settlementAdjustment).toFixed(2));
+    });
+
+    res.status(200).json({
+      message: 'Flat balances calculated successfully!',
+      balances: Object.values(balances)
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Create Settlement (Settle Up) Route ---
+app.post('/api/settlements/create', authMiddleware, async (req, res) => {
+  try {
+    const { paidTo, amount } = req.body;
+
+    const flat = await Flat.findOne({ members: req.user.id });
+    if (!flat) {
+      return res.status(404).json({ error: 'You must belong to a flat to settle up!' });
+    }
+
+    const newSettlement = new Settlement({
+      paidBy: req.user.id,
+      paidTo,
+      flat: flat._id,
+      amount
+    });
+
+    await newSettlement.save();
+
+    res.status(201).json({
+      message: 'Payment recorded successfully!',
+      settlement: newSettlement
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Create Settlement (Settle Up) Route ---
+app.post('/api/settlements/create', authMiddleware, async (req, res) => {
+  try {
+    const { paidTo, amount } = req.body;
+
+    // 1. Find the flat that the logged-in user belongs to
+    const flat = await Flat.findOne({ members: req.user.id });
+    if (!flat) {
+      return res.status(404).json({ error: 'You must belong to a flat to settle up!' });
+    }
+
+    // 2. Create the settlement entry
+    const newSettlement = new Settlement({
+      paidBy: req.user.id, // The logged-in user is sending the money
+      paidTo,              // The user receiving the money
+      flat: flat._id,      // Links it to their flat
+      amount               // How much was paid
+    });
+
+    // 3. Save to MongoDB
+    await newSettlement.save();
+
+    res.status(201).json({
+      message: 'Payment recorded successfully!',
+      settlement: newSettlement
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
