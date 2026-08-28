@@ -1,10 +1,3 @@
-const Settlement = require('./models/Settlement');
-const Expense = require('./models/Expense');
-const Flat = require('./models/Flat');
-const authMiddleware = require('./middleware/authMiddleware');
-const dns = require('node:dns');
-dns.setServers(['8.8.8.8', '1.1.1.1']);
-
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
@@ -12,7 +5,17 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
+const dns = require('node:dns');
+dns.setServers(['8.8.8.8', '1.1.1.1']);
+
 const User = require('./models/User');
+const Flat = require('./models/Flat');
+const Expense = require('./models/Expense');
+const Settlement = require('./models/Settlement');
+const Chore = require('./models/Chore');
+const Grocery = require('./models/Grocery');
+const Notice = require('./models/Notice');
+const authMiddleware = require('./middleware/authMiddleware');
 
 const app = express();
 
@@ -97,11 +100,10 @@ app.post('/api/users/login', async (req, res) => {
   }
 });
 
-// --- Protected Route Example (Uses Auth Middleware) ---
+// --- Protected Profile Route ---
 app.get('/api/users/profile', authMiddleware, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select('-password');
-    
     res.status(200).json({
       message: 'You have accessed a protected route successfully!',
       user,
@@ -115,16 +117,14 @@ app.get('/api/users/profile', authMiddleware, async (req, res) => {
 app.post('/api/flats/create', authMiddleware, async (req, res) => {
   try {
     const { name, address } = req.body;
-
-    // Generate a short unique invite code (e.g., "A3F9B2")
     const inviteCode = Math.random().toString(36).substring(2, 8).toUpperCase();
 
     const newFlat = new Flat({
       name,
       address,
       inviteCode,
-      admin: req.user.id,     // Comes from our authMiddleware bouncer!
-      members: [req.user.id]  // The creator is automatically the first member
+      admin: req.user.id,
+      members: [req.user.id]
     });
 
     await newFlat.save();
@@ -143,19 +143,16 @@ app.post('/api/flats/join', authMiddleware, async (req, res) => {
   try {
     const { inviteCode } = req.body;
 
-    // 1. Find the flat matching the invite code
     const flat = await Flat.findOne({ inviteCode });
     if (!flat) {
       return res.status(404).json({ error: 'Invalid invite code. Flat not found!' });
     }
 
-    // 2. Check if the user is already a member of this flat
     const isAlreadyMember = flat.members.includes(req.user.id);
     if (isAlreadyMember) {
       return res.status(400).json({ error: 'You are already a member of this flat!' });
     }
 
-    // 3. Add the user's ID to the flat's members array
     flat.members.push(req.user.id);
     await flat.save();
 
@@ -171,7 +168,6 @@ app.post('/api/flats/join', authMiddleware, async (req, res) => {
 // --- Get Flat Dashboard Route ---
 app.get('/api/flats/dashboard', authMiddleware, async (req, res) => {
   try {
-    // 1. Find a flat where the logged-in user's ID is inside the members array
     const flat = await Flat.findOne({ members: req.user.id })
       .populate('admin', 'name email')
       .populate('members', 'name email');
@@ -194,22 +190,19 @@ app.post('/api/expenses/create', authMiddleware, async (req, res) => {
   try {
     const { description, amount, splitBetween } = req.body;
 
-    // 1. Find the flat that the logged-in user belongs to
     const flat = await Flat.findOne({ members: req.user.id });
     if (!flat) {
       return res.status(404).json({ error: 'You must belong to a flat to add an expense!' });
     }
 
-    // 2. Create the new expense entry using our rulebook
     const newExpense = new Expense({
       description,
       amount,
-      paidBy: req.user.id,     // The logged-in user paid the money
-      flat: flat._id,          // Links it to their specific flat
-      splitBetween: splitBetween || flat.members // If no list is provided, split it among all roommates by default!
+      paidBy: req.user.id,
+      flat: flat._id,
+      splitBetween: splitBetween || flat.members
     });
 
-    // 3. Save it to MongoDB
     await newExpense.save();
 
     res.status(201).json({
@@ -224,16 +217,14 @@ app.post('/api/expenses/create', authMiddleware, async (req, res) => {
 // --- Get All Flat Expenses Route ---
 app.get('/api/expenses/flat', authMiddleware, async (req, res) => {
   try {
-    // 1. Find the flat that the logged-in user belongs to
     const flat = await Flat.findOne({ members: req.user.id });
     if (!flat) {
       return res.status(404).json({ error: 'You do not belong to any flat yet!' });
     }
 
-    // 2. Find all expenses belonging to this specific flat's ID
     const expenses = await Expense.find({ flat: flat._id })
       .populate('paidBy', 'name email')
-      .sort({ createdAt: -1 }); // Sorts them from newest to oldest!
+      .sort({ createdAt: -1 });
 
     res.status(200).json({
       message: 'Expenses fetched successfully!',
@@ -244,7 +235,7 @@ app.get('/api/expenses/flat', authMiddleware, async (req, res) => {
   }
 });
 
-// --- Calculate Flat Balances Route (Updated with Settlements) ---
+// --- Calculate Flat Balances Route ---
 app.get('/api/expenses/balances', authMiddleware, async (req, res) => {
   try {
     const flat = await Flat.findOne({ members: req.user.id }).populate('members', 'name email');
@@ -267,7 +258,6 @@ app.get('/api/expenses/balances', authMiddleware, async (req, res) => {
       };
     });
 
-    // 1. Process Expenses
     expenses.forEach(expense => {
       const payerId = expense.paidBy.toString();
       const amount = expense.amount;
@@ -286,7 +276,6 @@ app.get('/api/expenses/balances', authMiddleware, async (req, res) => {
       });
     });
 
-    // 2. Process Settlements (Cash paid back between roommates)
     settlements.forEach(settlement => {
       const payerId = settlement.paidBy.toString();
       const receiverId = settlement.paidTo.toString();
@@ -300,7 +289,6 @@ app.get('/api/expenses/balances', authMiddleware, async (req, res) => {
       }
     });
 
-    // 3. Final Net Balance Calculation
     Object.keys(balances).forEach(userId => {
       const user = balances[userId];
       user.netBalance = Number((user.paid - user.owed + user.settlementAdjustment).toFixed(2));
@@ -343,32 +331,185 @@ app.post('/api/settlements/create', authMiddleware, async (req, res) => {
   }
 });
 
-// --- Create Settlement (Settle Up) Route ---
-app.post('/api/settlements/create', authMiddleware, async (req, res) => {
+// --- Create Chore Route with Fair Round-Robin Rotation ---
+app.post('/api/chores/create', authMiddleware, async (req, res) => {
   try {
-    const { paidTo, amount } = req.body;
-
-    // 1. Find the flat that the logged-in user belongs to
+    const { title, dueDate } = req.body;
     const flat = await Flat.findOne({ members: req.user.id });
     if (!flat) {
-      return res.status(404).json({ error: 'You must belong to a flat to settle up!' });
+      return res.status(404).json({ error: 'You must belong to a flat to add a chore!' });
     }
 
-    // 2. Create the settlement entry
-    const newSettlement = new Settlement({
-      paidBy: req.user.id, // The logged-in user is sending the money
-      paidTo,              // The user receiving the money
-      flat: flat._id,      // Links it to their flat
-      amount               // How much was paid
+    if (!flat.members || flat.members.length === 0) {
+      return res.status(400).json({ error: 'No members found in this flat!' });
+    }
+
+    const existingChores = await Chore.find({ flat: flat._id, status: 'Pending' });
+
+    const workloadCounts = {};
+    flat.members.forEach(memberId => {
+      workloadCounts[memberId.toString()] = 0;
     });
 
-    // 3. Save to MongoDB
-    await newSettlement.save();
-
-    res.status(201).json({
-      message: 'Payment recorded successfully!',
-      settlement: newSettlement
+    existingChores.forEach(chore => {
+      if (chore.assignedTo) {
+        const assignedId = chore.assignedTo.toString();
+        if (workloadCounts[assignedId] !== undefined) {
+          workloadCounts[assignedId]++;
+        }
+      }
     });
+
+    let nextAssigneeId = flat.members[0];
+    let minWorkload = Infinity;
+
+    flat.members.forEach(memberId => {
+      const idStr = memberId.toString();
+      if (workloadCounts[idStr] < minWorkload) {
+        minWorkload = workloadCounts[idStr];
+        nextAssigneeId = memberId;
+      }
+    });
+
+    const newChore = new Chore({
+      title,
+      flat: flat._id,
+      assignedTo: nextAssigneeId,
+      dueDate: dueDate || 'This Week'
+    });
+
+    await newChore.save();
+    const populatedChore = await Chore.findById(newChore._id).populate('assignedTo', 'name email');
+
+    res.status(201).json({ message: 'Chore created and rotated successfully!', chore: populatedChore });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Get Flat Chores Route ---
+app.get('/api/chores/flat', authMiddleware, async (req, res) => {
+  try {
+    const flat = await Flat.findOne({ members: req.user.id });
+    if (!flat) {
+      return res.status(404).json({ error: 'You do not belong to any flat yet!' });
+    }
+
+    const chores = await Chore.find({ flat: flat._id }).populate('assignedTo', 'name email').sort({ createdAt: -1 });
+    res.status(200).json({ message: 'Chores fetched successfully!', chores });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Toggle Chore Status Route ---
+app.patch('/api/chores/:id/toggle', authMiddleware, async (req, res) => {
+  try {
+    const chore = await Chore.findById(req.params.id);
+    if (!chore) return res.status(404).json({ error: 'Chore not found!' });
+
+    chore.status = chore.status === 'Completed' ? 'Pending' : 'Completed';
+    await chore.save();
+
+    const updatedChore = await Chore.findById(chore._id).populate('assignedTo', 'name email');
+    res.status(200).json({ message: 'Chore status updated!', chore: updatedChore });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Create Grocery Item Route ---
+app.post('/api/groceries/create', authMiddleware, async (req, res) => {
+  try {
+    const { title } = req.body;
+    const flat = await Flat.findOne({ members: req.user.id });
+    if (!flat) {
+      return res.status(404).json({ error: 'You must belong to a flat to add items!' });
+    }
+
+    const newItem = new Grocery({
+      title,
+      flat: flat._id,
+      addedBy: req.user.id,
+      checked: false
+    });
+
+    await newItem.save();
+    const populatedItem = await Grocery.findById(newItem._id).populate('addedBy', 'name email');
+
+    res.status(201).json({ message: 'Grocery item added!', item: populatedItem });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Get Flat Groceries Route ---
+app.get('/api/groceries/flat', authMiddleware, async (req, res) => {
+  try {
+    const flat = await Flat.findOne({ members: req.user.id });
+    if (!flat) {
+      return res.status(404).json({ error: 'You do not belong to any flat yet!' });
+    }
+
+    const groceries = await Grocery.find({ flat: flat._id }).populate('addedBy', 'name email').sort({ createdAt: -1 });
+    res.status(200).json({ message: 'Groceries fetched successfully!', groceries });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Toggle Grocery Check Status Route ---
+app.patch('/api/groceries/:id/toggle', authMiddleware, async (req, res) => {
+  try {
+    const item = await Grocery.findById(req.params.id);
+    if (!item) return res.status(404).json({ error: 'Item not found!' });
+
+    item.checked = !item.checked;
+    await item.save();
+
+    const updatedItem = await Grocery.findById(item._id).populate('addedBy', 'name email');
+    res.status(200).json({ message: 'Grocery status updated!', item: updatedItem });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// --- Create Notice Route ---
+app.post('/api/notices/create', authMiddleware, async (req, res) => {
+  try {
+    const { title, content } = req.body;
+    const flat = await Flat.findOne({ members: req.user.id });
+    if (!flat) {
+      return res.status(404).json({ error: 'You must belong to a flat to post a notice!' });
+    }
+
+    const newNotice = new Notice({
+      title,
+      content,
+      flat: flat._id,
+      postedBy: req.user.id
+    });
+
+    await newNotice.save();
+    const populatedNotice = await Notice.findById(newNotice._id).populate('postedBy', 'name email');
+
+    res.status(201).json({ message: 'Notice posted successfully!', notice: populatedNotice });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Get Flat Notices Route ---
+app.get('/api/notices/flat', authMiddleware, async (req, res) => {
+  try {
+    const flat = await Flat.findOne({ members: req.user.id });
+    if (!flat) {
+      return res.status(404).json({ error: 'You do not belong to any flat yet!' });
+    }
+
+    const notices = await Notice.find({ flat: flat._id }).populate('postedBy', 'name email').sort({ createdAt: -1 });
+    res.status(200).json({ message: 'Notices fetched successfully!', notices });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
