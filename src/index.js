@@ -5,9 +5,6 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
-const dns = require('node:dns');
-dns.setServers(['8.8.8.8', '1.1.1.1']);
-
 const User = require('./models/User');
 const Flat = require('./models/Flat');
 const Expense = require('./models/Expense');
